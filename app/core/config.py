@@ -27,6 +27,7 @@ class Settings:
     default_page_size: int
     audit_retention_days: int
     job_lease_seconds: int
+    cleanup_batch_size: int
 
     @classmethod
     def load(cls) -> "Settings":
@@ -42,6 +43,7 @@ class Settings:
             default_page_size=_positive_integer("TOWNSHIP_DEFAULT_PAGE_SIZE", 20, maximum=100),
             audit_retention_days=_positive_integer("TOWNSHIP_AUDIT_RETENTION_DAYS", 365, maximum=3650),
             job_lease_seconds=_positive_integer("TOWNSHIP_JOB_LEASE_SECONDS", 60, maximum=3600),
+            cleanup_batch_size=_positive_integer("TOWNSHIP_CLEANUP_BATCH_SIZE", 50, maximum=500),
         )
 
     def public_view(self) -> dict:
@@ -53,4 +55,5 @@ class Settings:
             "default_page_size": self.default_page_size,
             "audit_retention_days": self.audit_retention_days,
             "job_lease_seconds": self.job_lease_seconds,
+            "cleanup_batch_size": self.cleanup_batch_size,
         }

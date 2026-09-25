@@ -215,6 +215,85 @@ CREATE TABLE IF NOT EXISTS background_jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_ready ON background_jobs(status, available_at);
+
+CREATE TABLE IF NOT EXISTS retention_policies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    resource_type TEXT NOT NULL CHECK(resource_type IN ('resident','affair','petition','announcement','audit_event')),
+    status_filter TEXT,
+    retention_days INTEGER NOT NULL CHECK(retention_days >= 0),
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+    description TEXT NOT NULL DEFAULT '',
+    created_by INTEGER REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_retention_policy_key
+    ON retention_policies(resource_type, IFNULL(status_filter, ''));
+
+CREATE TABLE IF NOT EXISTS retention_holds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    resource_type TEXT NOT NULL CHECK(resource_type IN ('resident','affair','petition','announcement','audit_event')),
+    resource_id INTEGER NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'record' CHECK(scope IN ('record','chain')),
+    reason TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_by INTEGER REFERENCES users(id),
+    created_by_name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    released_at TEXT,
+    released_by_name TEXT,
+    release_reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_holds_resource ON retention_holds(resource_type, resource_id);
+
+CREATE TABLE IF NOT EXISTS cleanup_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','confirmed','executing','completed','failed','cancelled')),
+    policy_fingerprint TEXT NOT NULL,
+    policies_json TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    generated_by INTEGER REFERENCES users(id),
+    generated_by_name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    confirmed_by_name TEXT,
+    confirmed_at TEXT,
+    finished_at TEXT,
+    error_message TEXT
+);
+
+CREATE TABLE IF NOT EXISTS cleanup_plan_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id INTEGER NOT NULL REFERENCES cleanup_plans(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    resource_type TEXT NOT NULL,
+    resource_id INTEGER NOT NULL,
+    policy_id INTEGER,
+    retention_days INTEGER NOT NULL,
+    cutoff_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','deleted','skipped_frozen','skipped_referenced','skipped_missing')),
+    reason TEXT,
+    batch_id INTEGER,
+    processed_at TEXT,
+    UNIQUE(plan_id, resource_type, resource_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cleanup_items_pending ON cleanup_plan_items(plan_id, status, seq);
+
+CREATE TABLE IF NOT EXISTS cleanup_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id INTEGER NOT NULL REFERENCES cleanup_plans(id) ON DELETE CASCADE,
+    batch_no INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','committed')),
+    executor_name TEXT NOT NULL,
+    processed_count INTEGER NOT NULL DEFAULT 0,
+    deleted_count INTEGER NOT NULL DEFAULT 0,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL,
+    committed_at TEXT,
+    UNIQUE(plan_id, batch_no)
+);
 '''
 
 PERMISSIONS = [
@@ -233,6 +312,10 @@ PERMISSIONS = [
     ("announcements.write", "维护公告", "announcements", "write"),
     ("audit.read", "查看审计", "audit", "read"),
     ("jobs.run", "执行后台任务", "jobs", "run"),
+    ("retention.read", "查看保留策略与清理清单", "retention", "read"),
+    ("retention.write", "维护保留策略与冻结", "retention", "write"),
+    ("retention.confirm", "确认清理清单", "retention", "confirm"),
+    ("retention.execute", "执行清理任务", "retention", "execute"),
 ]
 
 
