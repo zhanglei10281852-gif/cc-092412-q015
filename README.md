@@ -11,6 +11,7 @@
 - 身份与权限：用户、角色、细粒度权限、会话令牌、账号停用和会话撤销。
 - 审计记录：关键身份操作留痕，并对口令和令牌等敏感字段做过滤。
 - 后台任务：使用 SQLite 保存待执行任务，支持去重、租约、重试和完成回执。
+- 数据保留与清理：按资源类型与业务状态配置保留期限；支持对单条记录或关联链设置有原因、有期限的冻结；清理先产出候选清单，经授权确认后分批执行，冻结中或仍被有效业务引用的数据一律保留。
 
 ## 运行环境
 
@@ -76,6 +77,17 @@ python -m app.cli smoke
 ```
 
 该命令在进程内启动应用并检查服务根路径与健康接口，适合部署前快速确认路由和数据库初始化是否正常。
+
+## 数据保留与清理
+
+保留策略、冻结与清理批次接口位于 `/api/retention`，需要管理员会话（`retention.read` / `retention.write` / `retention.clean` 权限）。
+
+1. **配置策略**：`PUT /api/retention/policies`，按资源类型（`residents`、`affairs`、`petitions`、`announcements`）和业务状态设置保留天数；状态 `*` 表示该类型全部状态，保留天数留空表示永久保留。
+2. **设置冻结**：`POST /api/retention/freezes`，对单条记录（`record`）或关联链（`chain`，如居民及其全部事务）设置带原因和到期时间的冻结；复查、投诉或审计期间可随时追加，到期或显式解除（`/release`）后恢复正常评估。
+3. **生成候选清单**：`POST /api/retention/batches/candidates`，按当时启用的策略扫描并对每条记录给出 `delete`/`retain` 判定及保留原因。
+4. **授权确认**：`POST /api/retention/batches/{id}/confirm`，确认时锁定策略快照，此后修改策略不追溯改变本批次。
+5. **分批执行**：`POST /api/retention/batches/{id}/execute?limit=200`，每批在单个即时事务中提交并推进边界；中断后再次调用即从已提交边界继续，重复运行不会重复计数。执行时仍会重新校验冻结与有效业务引用，任一命中则该条改为保留。
+6. **解释与对账**：`GET /api/retention/explain/{type}/{id}` 说明某条数据为何保留或可清理；`GET /api/retention/batches/{id}/reconcile` 从候选清单、执行结果、库内实际数据和审计记录逐项核对。
 
 ## 目录结构
 

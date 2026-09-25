@@ -215,7 +215,88 @@ CREATE TABLE IF NOT EXISTS background_jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_ready ON background_jobs(status, available_at);
+
+CREATE TABLE IF NOT EXISTS retention_policies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    resource_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT '*',
+    retain_days INTEGER,
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    note TEXT NOT NULL DEFAULT '',
+    updated_by_user_id INTEGER REFERENCES users(id),
+    updated_by_name TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(resource_type, status)
+);
+
+CREATE TABLE IF NOT EXISTS retention_freezes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    resource_type TEXT NOT NULL,
+    resource_id INTEGER NOT NULL,
+    scope TEXT NOT NULL CHECK(scope IN ('record','chain')),
+    reason TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_by_user_id INTEGER,
+    created_by_name TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    released_at TEXT,
+    released_by_user_id INTEGER,
+    released_by_name TEXT NOT NULL DEFAULT '',
+    release_reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_freezes_target ON retention_freezes(resource_type, resource_id);
+CREATE INDEX IF NOT EXISTS idx_freezes_active ON retention_freezes(released_at, expires_at);
+
+CREATE TABLE IF NOT EXISTS cleanup_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL DEFAULT 'candidate' CHECK(status IN ('candidate','confirmed','executing','completed','cancelled')),
+    resource_types_json TEXT NOT NULL,
+    policy_snapshot_json TEXT,
+    note TEXT NOT NULL DEFAULT '',
+    created_by_user_id INTEGER,
+    created_by_name TEXT NOT NULL DEFAULT '',
+    confirmed_by_user_id INTEGER,
+    confirmed_by_name TEXT NOT NULL DEFAULT '',
+    confirmed_at TEXT,
+    authorization_note TEXT NOT NULL DEFAULT '',
+    boundary_item_id INTEGER NOT NULL DEFAULT 0,
+    completed_at TEXT,
+    cancelled_at TEXT,
+    cancel_reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cleanup_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES cleanup_batches(id) ON DELETE CASCADE,
+    resource_type TEXT NOT NULL,
+    resource_id INTEGER NOT NULL,
+    captured_status TEXT,
+    anchor_time TEXT,
+    retain_days INTEGER,
+    eligibility_time TEXT,
+    label TEXT NOT NULL DEFAULT '',
+    decision TEXT NOT NULL CHECK(decision IN ('delete','retain')),
+    state TEXT NOT NULL CHECK(state IN ('pending','retained','deleted','skipped')),
+    block_reason TEXT,
+    executed_at TEXT,
+    UNIQUE(batch_id, resource_type, resource_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cleanup_items_batch ON cleanup_items(batch_id, id);
 '''
+
+DEFAULT_RETENTION_POLICIES = [
+    ("residents", "*", None, "居民档案默认永久保留，如确需清理须显式配置"),
+    ("affairs", "已办结", 1825, "已办结事务默认保留五年"),
+    ("affairs", "已退回", 1825, "已退回事务默认保留五年"),
+    ("petitions", "已办结", 1825, "已办结信访默认保留五年"),
+    ("petitions", "复查完结", 3650, "复查完结信访默认保留十年"),
+    ("announcements", "*", 1095, "公告默认保留三年"),
+]
 
 PERMISSIONS = [
     ("users.read", "查看用户", "users", "read"),
@@ -233,6 +314,9 @@ PERMISSIONS = [
     ("announcements.write", "维护公告", "announcements", "write"),
     ("audit.read", "查看审计", "audit", "read"),
     ("jobs.run", "执行后台任务", "jobs", "run"),
+    ("retention.read", "查看保留策略", "retention", "read"),
+    ("retention.write", "维护保留策略与冻结", "retention", "write"),
+    ("retention.clean", "生成并执行清理批次", "retention", "clean"),
 ]
 
 
@@ -307,6 +391,12 @@ def init_db() -> None:
             "INSERT OR IGNORE INTO role_permissions(role_id,permission_id,granted_at) SELECT ?,id,? FROM permissions",
             (administrator, now),
         )
+        for resource_type, status, retain_days, note in DEFAULT_RETENTION_POLICIES:
+            connection.execute(
+                "INSERT OR IGNORE INTO retention_policies(resource_type,status,retain_days,is_active,note,created_at,updated_at) "
+                "VALUES(?,?,?,1,?,?,?)",
+                (resource_type, status, retain_days, note, now, now),
+            )
 
 
 def migrate_db() -> None:
